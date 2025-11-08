@@ -9,15 +9,12 @@ from regras_protheus import REGRAS_NEGOCIO
 
 # --- 1. CONFIGURAÇÕES (PREENCHA AQUI) ---
 
-# Cole sua Chave de API do Google AI Studio aqui
-GOOGLE_API_KEY = "AIzaSyAZL2PWZ9cJkwOSJyjdstodZldUbCgZ19Y" 
+GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 
-# Configure a string de conexão do seu banco de TESTES
-# Lembre-se: use um usuário READ-ONLY
-DB_HOST = "10.0.0.90"
-DB_NAME = "PROTHEUS12"
-DB_USER = "sa"
-DB_PASS = "2)jV}=4Gzkk3"
+DB_HOST = st.secrets["DB_HOST"]
+DB_NAME = st.secrets["DB_NAME"]
+DB_USER = st.secrets["DB_USER"]
+DB_PASS = st.secrets["DB_PASS"]
 
 # Monta a string de conexão (SQL Server / pyodbc)
 # Garanta que você tenha o 'ODBC Driver 17 for SQL Server' (ou mais novo) instalado
