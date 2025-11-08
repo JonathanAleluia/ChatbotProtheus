@@ -1,0 +1,75 @@
+# ==============================
+# 🐍 Python
+# ==============================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Ambiente virtual
+.venv/
+venv/
+env/
+ENV/
+
+# Arquivos de configuração locais
+*.env
+*.ini
+*.cfg
+*.toml
+*.db
+*.sqlite3
+
+# ==============================
+# 🧠 Streamlit
+# ==============================
+.streamlit/secrets.toml
+.streamlit/config.toml
+.streamlit/cache/
+.streamlit/static/
+
+# ==============================
+# 📦 Dependências / Builds
+# ==============================
+dist/
+build/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+wheels/
+
+# ==============================
+# ⚙️ IDEs e Ferramentas
+# ==============================
+.vscode/
+.idea/
+*.code-workspace
+
+# ==============================
+# 🧰 Logs e dumps
+# ==============================
+*.log
+*.out
+*.err
+*.dump
+logs/
+debug.log
+
+# ==============================
+# 💾 Sistema Operacional
+# ==============================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==============================
+# 🧪 Testes / Dados temporários
+# ==============================
+tests/__pycache__/
+t
