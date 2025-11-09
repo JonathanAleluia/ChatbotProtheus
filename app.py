@@ -31,7 +31,7 @@ db_engine = create_engine(CONNECTION_STRING)
 # Modelos
 llm_sql = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=GOOGLE_API_KEY)
 llm_texto = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
-modo_debug = st.sidebar.checkbox("Ativar modo debug (mostrar SQL)")
+#modo_debug = st.sidebar.checkbox("Ativar modo debug (mostrar SQL)")
 
 # =======================================
 # 2️⃣ LEITURA DO DICIONÁRIO SX3/SIX
@@ -147,11 +147,11 @@ def executar_sql_real(sql_query):
             rows = result.mappings().all()
             return pd.DataFrame(rows)
     except Exception as e:
-        if modo_debug:
-            st.exception(e)
-        else:
-            st.error("⚠️ Erro ao executar a consulta SQL.")
-        return pd.DataFrame()
+        # if modo_debug:
+        #     st.exception(e)
+        # else:
+        st.error("⚠️ Erro ao executar a consulta SQL.")
+        #return pd.DataFrame()
 
 # =======================================
 # 5️⃣ INTERFACE DE CHAT
@@ -176,24 +176,24 @@ if pergunta := st.chat_input("Digite sua pergunta sobre o Protheus..."):
             tipo = classificar_intencao(pergunta)
 
         if tipo == "texto":
+            # respostas conceituais — pode usar markdown
             with st.spinner("💬 Respondendo..."):
                 resposta = gerar_resposta_texto(pergunta)
                 st.markdown(resposta)
             st.session_state.messages.append({"role": "assistant", "content": resposta})
 
         else:
+            # respostas SQL — NÃO renderizar o markdown completo
             with st.spinner("🧠 Gerando SQL real..."):
                 historico = "\n".join(f"{m['role']}: {m['content']}" for m in st.session_state.messages[-5:])
                 resposta, sql_blocks = gerar_sql_real(pergunta, historico)
-                st.markdown(resposta)
 
             if sql_blocks:
                 for sql_query in sql_blocks:
                     sql_query = sql_query.strip()
-                    st.code(sql_query, language="sql")
-
-                    if modo_debug:
-                        st.info(f"Executando no banco {DB_NAME}...")
+                    st.code(sql_query, language="sql")  # Exibe só o código
+                    # if modo_debug:
+                    #     st.info(f"Executando no banco {DB_NAME}...")
 
                     df = executar_sql_real(sql_query)
                     if not df.empty:
@@ -203,7 +203,7 @@ if pergunta := st.chat_input("Digite sua pergunta sobre o Protheus..."):
                         st.info("ℹ️ Nenhum registro encontrado.")
             else:
                 st.warning("⚠️ Nenhuma query SQL detectada.")
-            st.session_state.messages.append({"role": "assistant", "content": resposta})
+
 
 st.markdown("---")
 st.caption("Desenvolvido com ❤️ | Protheus + SQL Server + Streamlit + Gemini Inteligente")
