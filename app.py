@@ -3,147 +3,207 @@ from sqlalchemy import create_engine, text
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 import datetime
+import json
+import re
+import pandas as pd
+from regras_protheus import REGRAS_NEGOCIO, REGRAS_PROTHEUS
 
-# Importa seu "Manual de Regras"
-from regras_protheus import REGRAS_NEGOCIO
+# =======================================
+# 1️⃣ CONFIGURAÇÕES E CONEXÕES
+# =======================================
 
-# --- 1. CONFIGURAÇÕES (PREENCHA AQUI) ---
+st.set_page_config(page_title="🤖 Chatbot Protheus Inteligente", layout="centered")
+st.title("🤖 Chatbot Protheus com Dicionário SX3/SIX Dinâmico")
 
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-
 DB_HOST = st.secrets["DB_HOST"]
 DB_NAME = st.secrets["DB_NAME"]
 DB_USER = st.secrets["DB_USER"]
 DB_PASS = st.secrets["DB_PASS"]
 
-# Monta a string de conexão (SQL Server / pyodbc)
-# Garanta que você tenha o 'ODBC Driver 17 for SQL Server' (ou mais novo) instalado
-try:
-    CONNECTION_STRING = (
-        f"mssql+pyodbc://{DB_USER}:{DB_PASS}@{DB_HOST}/"
-        f"{DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server"
-    )
-except Exception as e:
-    st.error(f"Erro ao montar a string de conexão: {e}")
-    st.stop()
-
-
-# --- 2. INICIALIZAÇÃO ---
-
-# Configura a página do Streamlit
-st.set_page_config(page_title="Chatbot Protheus", layout="centered")
-st.title("🤖 Chatbot Protheus (PoC)")
-
-# Inicializa o LLM (Gemini)
-try:    
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=GOOGLE_API_KEY)
-except Exception as e:
-    st.error(f"Erro ao inicializar o LLM. Verifique sua API Key. Erro: {e}")
-    st.stop()
-
-# Inicializa a conexão com o banco de dados
-try:
-    db_engine = create_engine(CONNECTION_STRING)
-except Exception as e:
-    st.error(f"Erro ao conectar ao banco. Verifique os dados de conexão e o driver ODBC. Erro: {e}")
-    st.stop()
-
-# Template do Prompt (O "Molde" da pergunta)
-prompt_template = PromptTemplate(
-    input_variables=["regras", "data_hoje", "pergunta", "historico"],
-    template="""{regras}
-    
-    Data de Hoje: {data_hoje}
-    Histórico da Conversa (para contexto):
-    {historico}
-    
-    Pergunta do Usuário: {pergunta}
-    
-    Gere APENAS o código SQL para esta pergunta:
-    """
+CONNECTION_STRING = (
+    f"mssql+pyodbc://{DB_USER}:{DB_PASS}@{DB_HOST}/"
+    f"{DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server"
 )
 
-# Cria a "Cadeia" (Chain) do LangChain
-sql_chain = prompt_template | llm 
+db_engine = create_engine(CONNECTION_STRING)
 
-# --- 3. LÓGICA DO CHAT ---
+# Modelos
+llm_sql = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=GOOGLE_API_KEY)
+llm_texto = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=GOOGLE_API_KEY)
+modo_debug = st.sidebar.checkbox("Ativar modo debug (mostrar SQL)")
 
-# Inicializa o histórico do chat no Streamlit
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# =======================================
+# 2️⃣ LEITURA DO DICIONÁRIO SX3/SIX
+# =======================================
 
-# Exibe as mensagens do histórico
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Captura a pergunta do usuário
-if prompt_usuario := st.chat_input("Pergunte algo sobre vendas ou estoque..."):
-    # Adiciona a pergunta ao histórico e exibe
-    st.session_state.messages.append({"role": "user", "content": prompt_usuario})
-    with st.chat_message("user"):
-        st.markdown(prompt_usuario)
-
-    # --- 🔹 NOVO TRATAMENTO: Mensagens simples (saudações, etc.)
-    saudacoes = ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite", "e aí", "tudo bem"]
-    if prompt_usuario.lower().strip() in saudacoes:
-        resposta = "Olá! 😊 Como posso te ajudar com informações sobre vendas ou estoque?"
-        with st.chat_message("assistant"):
-            st.markdown(resposta)
-        st.session_state.messages.append({"role": "assistant", "content": resposta})
-        st.stop()
-
-    # --- Se não for saudação, segue o fluxo normal ---
-    with st.chat_message("assistant"):
-        with st.spinner("Analisando seu banco..."):
+@st.cache_data(ttl=3600, show_spinner=False)
+def obter_mapeamento_protheus(_engine):
+    tabelas = ["SC5", "SC6", "SD2", "SF2", "SB1", "SB2", "SA1", "SA2"]
+    mapeamento = {}
+    with _engine.connect() as conn:
+        for tabela in tabelas:
             try:
-                # 1. PREPARAR O PROMPT
-                data_hoje = datetime.date.today().strftime("%Y-%m-%d")
-                historico_formatado = "\n".join(
-                    [f"{m['role']}: {m['content']}" for m in st.session_state.messages[-4:]]
-                )
-                
-                # Monta o dicionário de input
-                input_data = {
-                    "regras": REGRAS_NEGOCIO,
-                    "data_hoje": data_hoje,
-                    "pergunta": prompt_usuario,
-                    "historico": historico_formatado
+                query = text(f"""
+                    SELECT X3_CAMPO, X3_TIPO, X3_TAMANHO, X3_DECIMAL, X3_TITULO, X3_DESCRIC
+                    FROM SX3010
+                    WHERE X3_ARQUIVO = '{tabela[:3]}' AND D_E_L_E_T_ = ' '
+                    ORDER BY X3_ORDEM
+                """)
+                rows = conn.execute(query).fetchall()
+                mapeamento[tabela] = {
+                    "campos": [
+                        {
+                            "campo": r[0],
+                            "tipo": r[1],
+                            "tamanho": r[2],
+                            "decimal": r[3],
+                            "titulo": r[4],
+                            "descricao": r[5],
+                        }
+                        for r in rows
+                    ]
                 }
+            except Exception:
+                continue
+    return mapeamento
 
-                # 2. GERAR O SQL (O LLM pensa)
-                resposta_llm_objeto = sql_chain.invoke(input_data)
-                sql_bruto = resposta_llm_objeto.content
-                sql_gerado = sql_bruto.replace("```sql", "").replace("```", "").strip()
-                
-                # 3. CAMADA DE SEGURANÇA
-                if not sql_gerado.upper().strip().startswith("SELECT"):
-                    resposta = "Posso te ajudar a gerar consultas sobre vendas e estoque. O que deseja saber exatamente?"
-                    st.markdown(resposta)
-                    st.session_state.messages.append({"role": "assistant", "content": resposta})
-                    st.stop()
-                
-                st.code(sql_gerado, language="sql")
+with st.spinner("📚 Lendo dicionário SX3/SIX..."):
+    MAPEAMENTO_TABELAS = obter_mapeamento_protheus(db_engine)
 
-                # 4. EXECUTAR O SQL
-                with db_engine.connect() as conn:
-                    resultado = conn.execute(text(sql_gerado))
-                    dados = resultado.fetchall()
+mapeamento_formatado = json.dumps(MAPEAMENTO_TABELAS, indent=2, ensure_ascii=False)
 
-                # 5. TRADUZIR O RESULTADO
-                prompt_traducao = (
-                    f"A pergunta foi: '{prompt_usuario}'.\n"
-                    f"O SQL gerado foi: '{sql_gerado}'.\n"
-                    f"Os dados do banco são: {dados}\n\n"
-                    f"Com base nisso, dê uma resposta curta e amigável em português para o usuário."
-                )
-                
-                resposta_traducao_objeto = llm.invoke(prompt_traducao)
-                resposta_final = resposta_traducao_objeto.content
-                
-                st.markdown(resposta_final)
-                st.session_state.messages.append({"role": "assistant", "content": resposta_final})
+# =======================================
+# 3️⃣ PROMPTS DE COMPORTAMENTO
+# =======================================
 
-            except Exception as e:
-                st.error(f"Ocorreu um erro: {e}")
-                st.session_state.messages.append({"role": "assistant", "content": f"Ocorreu um erro: {e}"})
+intent_prompt = """
+Você é um classificador de intenção para um assistente de negócios do Protheus.
+Analise a pergunta do usuário e responda **apenas** com uma palavra:
+- "sql" → se a pergunta requer **dados reais** do banco (consultas sobre pedidos, vendas, produtos, estoques, valores, contagens, listagens, agregações, períodos, filiais, clientes, etc.)
+- "texto" → se a pergunta requer uma **resposta conceitual, explicativa, saudação, teste ou ajuda de procedimento**.
+
+Regras:
+- Perguntas curtas como "teste", "oi", "funciona?" → "texto"
+- Pedidos de definição ou explicação ("o que é SC5?", "como cadastrar produto?") → "texto"
+- Perguntas com "total", "quantidade", "por filial", "mês", "ano", "vendas" → "sql"
+- Em caso de dúvida → "texto"
+
+Pergunta:
+{pergunta}
+
+Retorne apenas: sql ou texto
+"""
+
+short_answer_prompt = """
+Você é um assistente conversacional para usuários de negócio do Protheus.
+Responda em **português claro**, de forma **curta, direta e amigável**.
+
+Regras:
+1. Máximo de **2 frases curtas**.
+2. Tom profissional e simpático — sem jargões técnicos.
+3. Se for uma saudação ou teste (ex: "teste", "oi"), diga algo leve, como "Tudo certo — pronto pra ajudar! 😊"
+4. Se for explicação, resuma (ex: "SC5 é o cabeçalho de pedidos, com cliente e valores.").
+5. Nunca gere SQL aqui.
+
+Pergunta:
+{pergunta}
+"""
+
+prompt_template = PromptTemplate(
+    input_variables=["regras", "mapeamento", "data_hoje", "pergunta", "historico"],
+    template=open("prompt_template.txt", encoding="utf-8").read()
+)
+sql_chain = prompt_template | llm_sql
+
+# =======================================
+# 4️⃣ EXECUÇÃO
+# =======================================
+
+def classificar_intencao(pergunta):
+    resposta = llm_texto.invoke(intent_prompt.format(pergunta=pergunta)).content.strip().lower()
+    return "sql" if "sql" in resposta else "texto"
+
+def gerar_resposta_texto(pergunta):
+    return llm_texto.invoke(short_answer_prompt.format(pergunta=pergunta)).content.strip()
+
+def gerar_sql_real(pergunta, historico):
+    data_hoje = datetime.date.today().strftime("%Y-%m-%d")
+    entrada = {
+        "regras": REGRAS_NEGOCIO + "\n\n" + json.dumps(REGRAS_PROTHEUS, ensure_ascii=False, indent=2),
+        "mapeamento": mapeamento_formatado,
+        "data_hoje": data_hoje,
+        "pergunta": pergunta,
+        "historico": historico,
+    }
+    resposta = sql_chain.invoke(entrada).content
+    sql_blocks = re.findall(r"```sql\s+(.*?)```", resposta, flags=re.DOTALL | re.IGNORECASE)
+    return resposta, sql_blocks
+
+def executar_sql_real(sql_query):
+    try:
+        with db_engine.connect() as conn:
+            result = conn.execute(text(sql_query))
+            rows = result.mappings().all()
+            return pd.DataFrame(rows)
+    except Exception as e:
+        if modo_debug:
+            st.exception(e)
+        else:
+            st.error("⚠️ Erro ao executar a consulta SQL.")
+        return pd.DataFrame()
+
+# =======================================
+# 5️⃣ INTERFACE DE CHAT
+# =======================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Olá 👋! Posso gerar consultas SQL reais do Protheus ou responder perguntas simples. O que deseja saber?"}
+    ]
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+if pergunta := st.chat_input("Digite sua pergunta sobre o Protheus..."):
+    st.session_state.messages.append({"role": "user", "content": pergunta})
+    with st.chat_message("user"):
+        st.markdown(pergunta)
+
+    with st.chat_message("assistant"):
+        with st.spinner("🎯 Entendendo sua intenção..."):
+            tipo = classificar_intencao(pergunta)
+
+        if tipo == "texto":
+            with st.spinner("💬 Respondendo..."):
+                resposta = gerar_resposta_texto(pergunta)
+                st.markdown(resposta)
+            st.session_state.messages.append({"role": "assistant", "content": resposta})
+
+        else:
+            with st.spinner("🧠 Gerando SQL real..."):
+                historico = "\n".join(f"{m['role']}: {m['content']}" for m in st.session_state.messages[-5:])
+                resposta, sql_blocks = gerar_sql_real(pergunta, historico)
+                st.markdown(resposta)
+
+            if sql_blocks:
+                for sql_query in sql_blocks:
+                    sql_query = sql_query.strip()
+                    st.code(sql_query, language="sql")
+
+                    if modo_debug:
+                        st.info(f"Executando no banco {DB_NAME}...")
+
+                    df = executar_sql_real(sql_query)
+                    if not df.empty:
+                        st.success(f"✅ {len(df)} registros retornados.")
+                        st.dataframe(df, use_container_width=True)
+                    else:
+                        st.info("ℹ️ Nenhum registro encontrado.")
+            else:
+                st.warning("⚠️ Nenhuma query SQL detectada.")
+            st.session_state.messages.append({"role": "assistant", "content": resposta})
+
+st.markdown("---")
+st.caption("Desenvolvido com ❤️ | Protheus + SQL Server + Streamlit + Gemini Inteligente")
